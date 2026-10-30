@@ -1,0 +1,140 @@
+import cv2
+import csv
+from ultralytics import YOLO
+
+# Load a pretrained vehicle detection model
+model = YOLO("yolo11n.pt")
+
+# Open the input traffic video
+video = cv2.VideoCapture("traffic.mp4")
+
+if not video.isOpened():
+    print("Error: Cannot open traffic.mp4")
+    raise SystemExit(1)
+
+# Read video properties
+width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fps = video.get(cv2.CAP_PROP_FPS)
+
+if fps <= 0:
+    fps = 25.0
+
+# Create the output video
+writer = cv2.VideoWriter(
+    "output_traffic.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    fps,
+    (width, height)
+)
+
+# COCO vehicle class IDs
+vehicle_names = {
+    2: "Car",
+    3: "Motorcycle",
+    5: "Bus",
+    7: "Truck"
+}
+
+# Store unique tracked vehicle IDs
+seen_ids = set()
+vehicle_counts = {
+    "Car": 0,
+    "Motorcycle": 0,
+    "Bus": 0,
+    "Truck": 0
+}
+
+try:
+    while True:
+        success, frame = video.read()
+
+        if not success:
+            break
+
+        # Detect and track vehicles
+        results = model.track(
+            frame,
+            persist=True,
+            tracker="bytetrack.yaml",
+            classes=list(vehicle_names.keys()),
+            conf=0.30,
+            verbose=False
+        )
+
+        result = results[0]
+        annotated = result.plot()
+
+        # Count each tracked ID only once
+        if result.boxes is not None and result.boxes.id is not None:
+            ids = result.boxes.id.cpu().tolist()
+            classes = result.boxes.cls.cpu().tolist()
+
+            for track_id, class_id in zip(ids, classes):
+                track_id = int(track_id)
+                class_id = int(class_id)
+
+                if track_id not in seen_ids:
+                    seen_ids.add(track_id)
+
+                    name = vehicle_names.get(class_id)
+                    if name:
+                        vehicle_counts[name] += 1
+
+        # Display statistics
+        total = sum(vehicle_counts.values())
+
+        cv2.rectangle(
+            annotated, (10, 10), (330, 155),
+            (0, 0, 0), -1
+        )
+
+        cv2.putText(
+            annotated,
+            f"Total Vehicles: {total}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7, (0, 255, 255), 2
+        )
+
+        y = 75
+        for name, count in vehicle_counts.items():
+            cv2.putText(
+                annotated,
+                f"{name}: {count}",
+                (20, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (255, 255, 255), 2
+            )
+            y += 25
+
+        writer.write(annotated)
+
+        cv2.imshow("Smart Traffic Management", annotated)
+
+        # Press Q to stop
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+finally:
+    video.release()
+    writer.release()
+    cv2.destroyAllWindows()
+
+# Save results to CSV
+with open("vehicle_counts.csv", "w", newline="") as file:
+    csv_writer = csv.writer(file)
+    csv_writer.writerow(["Vehicle Type", "Count"])
+
+    for name, count in vehicle_counts.items():
+        csv_writer.writerow([name, count])
+
+    csv_writer.writerow(["Total", sum(vehicle_counts.values())])
+
+print("\nVehicle Counting Results")
+for name, count in vehicle_counts.items():
+    print(f"{name}: {count}")
+
+print(f"Total vehicles: {sum(vehicle_counts.values())}")
+print("Output saved to output_traffic.mp4")
+print("Statistics saved to vehicle_counts.csv")
